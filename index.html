@@ -1,100 +1,108 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Interactive Wallpaper</title>
-<style>
-*{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;overflow:hidden}
-body{
-  background:#000 url("wallpaper.png") center center/cover no-repeat;
-  font-family:Arial,Helvetica,sans-serif;
-  user-select:none;
-}
-.overlay{
-  position:fixed;inset:0;
-  background:linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.18));
-  pointer-events:none;
-}
-.player{
-  position:fixed;
-  left:50%;bottom:42px;
-  transform:translateX(-50%);
-  display:flex;align-items:center;gap:14px;
-  padding:12px 18px 12px 12px;
-  border:1px solid rgba(255,255,255,.25);
-  border-radius:50px;
-  background:rgba(15,15,15,.45);
-  backdrop-filter:blur(14px);
-  -webkit-backdrop-filter:blur(14px);
-  box-shadow:0 10px 35px rgba(0,0,0,.35);
-}
-button{
-  width:48px;height:48px;border:0;border-radius:50%;
-  background:rgba(255,255,255,.9);
-  color:#111;font-size:20px;cursor:pointer;
-  transition:.2s transform,.2s background;
-}
-button:hover{transform:scale(1.08);background:#fff}
-.info{color:#fff;min-width:180px}
-.title{font-size:14px;font-weight:700}
-.status{font-size:11px;opacity:.7;margin-top:3px}
-.volume{width:85px;accent-color:#fff;cursor:pointer}
-@media(max-width:600px){
-  .info{min-width:120px}.volume{width:60px}
-}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BSNL Portal Clone</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="overlay"></div>
 
-<div class="player">
-  <button id="playBtn" aria-label="Play/Pause">▶</button>
-  <div class="info">
-    <div class="title">Barsaat Banjaare</div>
-    <div class="status" id="status">Click play to start</div>
+<header class="topbar">
+  <div class="logo-wrap">
+    <div class="logo">⚡</div>
+    <div>
+      <div class="brand">BSNL</div>
+      <small>Connecting India</small>
+    </div>
   </div>
-  <input id="volume" class="volume" type="range" min="0" max="1" step="0.01" value="0.75">
-</div>
 
-<audio id="song" src="Barsaat Banjaare.mp3" preload="auto"></audio>
+  <nav class="nav">
+    <a class="active" href="#home">Home</a>
+    <a href="#landline">Landline</a>
+    <a href="#mobile">Mobile</a>
+    <a href="#recharge">Recharge</a>
+    <a href="#transactions">Transactions</a>
+    <a href="#bills">View Bills</a>
+    <a href="#complaints">Complaints</a>
+    <a href="#care">Customer Care</a>
+    <a href="#signin">Sign In</a>
+  </nav>
 
-<script>
-const song = document.getElementById("song");
-const playBtn = document.getElementById("playBtn");
-const statusText = document.getElementById("status");
-const volume = document.getElementById("volume");
+  <button class="menu-btn" aria-label="Open menu">☰</button>
+</header>
 
-song.volume = 0.75;
+<main id="home">
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">SHAPE THE FUTURE OF INDIA</p>
+      <p class="be">Be a</p>
+      <h1>Vidhya Mitram</h1>
+      <div class="pill">Be the change a child needs!</div>
+    </div>
 
-function updateUI(){
-  if(song.paused){
-    playBtn.textContent = "▶";
-    statusText.textContent = "Paused";
-  }else{
-    playBtn.textContent = "Ⅱ";
-    statusText.textContent = "Playing • Barsaat Banjaare";
-  }
-}
+    <div class="hero-art">
+      <img src="assets/reference-banner.jpg" alt="Educational connectivity banner">
+      <div class="sponsor">
+        <strong>SPONSOR</strong>
+        <span>FTTH Internet Broadband<br>for needy students</span>
+      </div>
+    </div>
 
-playBtn.addEventListener("click", async () => {
-  try {
-    if(song.paused) await song.play();
-    else song.pause();
-    updateUI();
-  } catch(e) {
-    statusText.textContent = "Unable to play the song";
-  }
-});
+    <div class="dots" aria-label="Banner controls">
+      <button class="dot active"></button><button class="dot"></button>
+      <button class="dot"></button><button class="dot"></button>
+      <button class="dot"></button>
+    </div>
+  </section>
 
-song.addEventListener("play", updateUI);
-song.addEventListener("pause", updateUI);
-song.addEventListener("ended", () => {
-  playBtn.textContent = "▶";
-  statusText.textContent = "Song finished";
-});
-volume.addEventListener("input", () => song.volume = volume.value);
-</script>
+  <section class="quick-actions">
+    <button onclick="showMessage('Recharge selected')">Recharge</button>
+    <button onclick="showMessage('Bill section selected')">View Bills</button>
+    <button onclick="showMessage('Complaint section selected')">Complaints</button>
+    <button onclick="showMessage('Customer Care selected')">Customer Care</button>
+  </section>
+
+  <section class="content">
+    <div class="card" id="landline">
+      <h2>Landline</h2>
+      <p>Manage your BSNL landline services and explore available plans.</p>
+      <button onclick="showMessage('Landline plans opened')">Explore</button>
+    </div>
+    <div class="card" id="mobile">
+      <h2>Mobile</h2>
+      <p>Check mobile services, prepaid and postpaid options.</p>
+      <button onclick="showMessage('Mobile services opened')">Explore</button>
+    </div>
+    <div class="card" id="recharge">
+      <h2>Recharge</h2>
+      <p>Quickly access your recharge services from one place.</p>
+      <button onclick="showMessage('Recharge page opened')">Recharge Now</button>
+    </div>
+  </section>
+</main>
+
+<footer id="care">
+  <div class="footer-grid">
+    <div>
+      <h3>ABOUT US</h3>
+      <p>Bharat Sanchar Nigam Ltd. provides telecom services and network management across India. This project is an educational front-end clone inspired by the supplied reference.</p>
+    </div>
+    <div>
+      <h3>OUR CONTACTS</h3>
+      <p>Corporate Office<br>Bharat Sanchar Bhavan<br>New Delhi-110 001</p>
+      <p>Corporate Identity Number<br>(CIN): U74899DL2000GOI107739</p>
+    </div>
+    <div>
+      <h3>CUSTOMER CARE</h3>
+      <p>LANDLINE / BROADBAND<br><b>1800-4444</b></p>
+      <p>GSM POSTPAID / PREPAID<br><b>1800-180-1503</b></p>
+    </div>
+  </div>
+  <div class="footer-bottom">© 2026 BSNL Portal Clone · Educational project</div>
+</footer>
+
+<div class="toast" id="toast"></div>
+<script src="script.js"></script>
 </body>
 </html>
