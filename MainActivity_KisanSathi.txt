@@ -1,0 +1,420 @@
+package com.example.myfirstaap
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { KisanSathiApp() }
+    }
+}
+
+@Composable
+fun KisanSathiApp() {
+    val green = Color(0xFF2E7D32)
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var dialogTitle by remember { mutableStateOf("") }
+    var dialogMessage by remember { mutableStateOf("") }
+    var showDialog by remember { mutableStateOf(false) }
+
+    fun showInfo(title: String, message: String) {
+        dialogTitle = title
+        dialogMessage = message
+        showDialog = true
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Kisan Sathi", fontWeight = FontWeight.Bold)
+                        Text("Your farming companion", fontSize = 12.sp)
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Text("🏠") },
+                    label = { Text("Home") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Text("🌾") },
+                    label = { Text("Services") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = { Text("🤝") },
+                    label = { Text("Support") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Text("ℹ️") },
+                    label = { Text("About") }
+                )
+            }
+        }
+    ) { padding ->
+        when (selectedTab) {
+            0 -> HomeScreen(padding, green, ::showInfo)
+            1 -> ServicesScreen(padding, green, ::showInfo)
+            2 -> SupportScreen(padding, green, ::showInfo)
+            3 -> AboutScreen(padding, green)
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(dialogTitle, fontWeight = FontWeight.Bold) },
+            text = { Text(dialogMessage) },
+            confirmButton = {
+                Button(onClick = { showDialog = false }) { Text("OK") }
+            }
+        )
+    }
+}
+
+@Composable
+fun HomeScreen(
+    padding: PaddingValues,
+    green: Color,
+    onInfo: (String, String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F9F7))
+            .padding(padding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = green)
+            ) {
+                Column(Modifier.padding(22.dp)) {
+                    Text("🌾", fontSize = 42.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Namaste Kisan 👋",
+                        color = Color.White,
+                        fontSize = 23.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Grow better. Live better.",
+                        color = Color.White.copy(alpha = .9f)
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        onClick = {
+                            onInfo(
+                                "Kisan Services",
+                                "Weather, Mandi Rates, Crop Information aur Government Schemes yahan milenge."
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = green
+                        )
+                    ) {
+                        Text("Explore Services", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        item {
+            Text("Today's Information", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        }
+
+        item {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                InfoCard(
+                    Modifier.weight(1f),
+                    "☁️",
+                    "Weather",
+                    "Check Now",
+                    Color(0xFF1565C0)
+                ) {
+                    onInfo("Weather", "Live weather API next version me connect ki jayegi.")
+                }
+
+                InfoCard(
+                    Modifier.weight(1f),
+                    "💰",
+                    "Mandi",
+                    "Prices",
+                    Color(0xFFEF6C00)
+                ) {
+                    onInfo("Mandi Prices", "Live mandi rates next version me connect kiye jayenge.")
+                }
+            }
+        }
+
+        item {
+            Text("Popular Services", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        }
+
+        item {
+            ServiceCard(
+                "Government Schemes",
+                "Find farmer schemes",
+                "🏛️",
+                green
+            ) {
+                onInfo("Government Schemes", "PM-KISAN aur other farmer schemes ki information yahan add hogi.")
+            }
+        }
+
+        item {
+            ServiceCard(
+                "Crop Information",
+                "Learn about crops",
+                "🌱",
+                green
+            ) {
+                onInfo("Crop Information", "Crop season, soil, irrigation aur basic information yahan milegi.")
+            }
+        }
+
+        item {
+            ServiceCard(
+                "Farming Guidance",
+                "Improve your farming",
+                "💡",
+                green
+            ) {
+                onInfo("Farming Guidance", "Modern farming techniques aur useful farming tips yahan add honge.")
+            }
+        }
+    }
+}
+
+@Composable
+fun ServicesScreen(
+    padding: PaddingValues,
+    green: Color,
+    onInfo: (String, String) -> Unit
+) {
+    val services = listOf(
+        Triple("Government Schemes", "Government schemes for farmers", "🏛️"),
+        Triple("Mandi Rates", "Check crop market prices", "💰"),
+        Triple("Weather", "Weather information", "☁️"),
+        Triple("Crop Information", "Crop growing information", "🌱"),
+        Triple("Farming Guidance", "Useful farming tips", "💡"),
+        Triple("Kisan Support", "Help farmers in need", "🤝")
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F9F7))
+            .padding(padding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Farmer Services 🌾", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text("Useful services for farmers")
+        }
+
+        items(services) { service ->
+            ServiceCard(service.first, service.second, service.third, green) {
+                onInfo(service.first, service.second)
+            }
+        }
+    }
+}
+
+@Composable
+fun SupportScreen(
+    padding: PaddingValues,
+    green: Color,
+    onInfo: (String, String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F9F7))
+            .padding(padding)
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(25.dp))
+        Text("🤝", fontSize = 70.sp)
+        Spacer(Modifier.height(18.dp))
+        Text("Kisan Support", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+        Text("Helping farmers who need support.", fontSize = 16.sp)
+        Spacer(Modifier.height(25.dp))
+
+        Button(
+            onClick = {
+                onInfo(
+                    "Support Farmers",
+                    "Future version me donation, charity aur farmer assistance system add kiya ja sakta hai."
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = green)
+        ) {
+            Text("🤝  Support a Farmer")
+        }
+    }
+}
+
+@Composable
+fun AboutScreen(
+    padding: PaddingValues,
+    green: Color
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F9F7))
+            .padding(padding)
+            .padding(20.dp)
+    ) {
+        Text(
+            "About Kisan Sathi",
+            fontSize = 27.sp,
+            fontWeight = FontWeight.Bold,
+            color = green
+        )
+
+        Spacer(Modifier.height(18.dp))
+
+        Text(
+            "Kisan Sathi is a farmer-focused application designed to provide useful farming information and services in one place.",
+            fontSize = 16.sp
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        AboutCard("🌾", "Farmer First", "The app is designed around the needs of farmers.")
+        AboutCard("📱", "Simple & Easy", "Clean interface so anyone can use the application.")
+        AboutCard("🤝", "Kisan Support", "Future versions can include a real farmer support system.")
+    }
+}
+
+@Composable
+fun AboutCard(emoji: String, title: String, description: String) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Row(
+            Modifier.padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(emoji, fontSize = 30.sp)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text(description, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun InfoCard(
+    modifier: Modifier,
+    emoji: String,
+    title: String,
+    value: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = modifier.clickable { onClick() },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(3.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(emoji, fontSize = 30.sp)
+            Spacer(Modifier.height(10.dp))
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(value, color = color, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+fun ServiceCard(
+    title: String,
+    subtitle: String,
+    emoji: String,
+    green: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .background(Color(0xFFE8F5E9), RoundedCornerShape(15.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(emoji, fontSize = 27.sp)
+            }
+
+            Spacer(Modifier.width(14.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(subtitle, fontSize = 13.sp, color = Color.Gray)
+            }
+
+            Text("›", color = green, fontSize = 30.sp)
+        }
+    }
+}
