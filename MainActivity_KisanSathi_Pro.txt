@@ -1,0 +1,1444 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.example.myfirstaap
+
+/*
+ * ============================================================
+ *  KISAN SATHI  –  Pro Edition (v1.0)
+ * ============================================================
+ *  Features
+ *   - Hindi / English (one tap, saved)
+ *   - Light / Dark / System theme (saved)
+ *   - Live-style Weather card + 5 day forecast + farming advisory
+ *   - Mandi rates: search, state filter, saved (favourite) list
+ *   - Crop guide (10 crops): sowing, harvest, water, soil, tips
+ *   - Government schemes: benefits, eligibility, how to apply,
+ *     official website + helpline call
+ *   - Profit calculator (revenue, cost, profit, break-even)
+ *   - Helplines (Kisan Call Centre etc.), Share app, Contact us
+ *   - Loading / Error / Retry states, back-navigation handling
+ *
+ *  Architecture
+ *   UI (Compose)  ->  FarmRepository (interface)  ->  DemoFarmRepository
+ *   To go LIVE: write ApiFarmRepository : FarmRepository (Retrofit /
+ *   Ktor) and replace DemoFarmRepository() in KisanSathiApp().
+ *   Nothing else in the UI needs to change.
+ *
+ *  Needs only the default Compose + Material3 + activity-compose
+ *  dependencies. No extra libraries.
+ * ============================================================
+ */
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import java.text.NumberFormat
+import java.util.Calendar
+import java.util.Locale
+import kotlin.math.abs
+
+// ============================================================
+//  CONFIG
+// ============================================================
+object AppConfig {
+    const val VERSION = "1.0.0"
+    const val SUPPORT_EMAIL = "support@yourdomain.com" // TODO: apni email daalein
+    const val SHARE_TEXT =
+        "Kisan Sathi app: mandi bhav, mausam, fasal jaankari aur sarkari yojanayein ek hi jagah. " +
+            "Download karein: https://play.google.com/store/apps/details?id=com.example.myfirstaap" // TODO: real link
+}
+
+// ============================================================
+//  ACTIVITY
+// ============================================================
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { KisanSathiApp() }
+    }
+}
+
+// ============================================================
+//  LOCALISATION  (English + Hindi)
+// ============================================================
+data class Tx(val en: String, val hi: String)
+
+val LocalHindi = compositionLocalOf { false }
+
+@Composable
+fun Tx.t(): String = if (LocalHindi.current) hi else en
+
+@Composable
+fun tr(en: String, hi: String): String = if (LocalHindi.current) hi else en
+
+// ============================================================
+//  PREFERENCES  (language, theme, saved mandi items)
+// ============================================================
+class AppPrefs(context: Context) {
+    private val sp = context.getSharedPreferences("kisan_sathi_prefs", Context.MODE_PRIVATE)
+
+    var isHindi: Boolean
+        get() = sp.getBoolean("hindi", false)
+        set(v) { sp.edit().putBoolean("hindi", v).apply() }
+
+    /** 0 = system, 1 = light, 2 = dark */
+    var themeMode: Int
+        get() = sp.getInt("theme", 0)
+        set(v) { sp.edit().putInt("theme", v).apply() }
+
+    var favorites: Set<String>
+        get() = HashSet(sp.getStringSet("fav", emptySet()) ?: emptySet())
+        set(v) { sp.edit().putStringSet("fav", HashSet(v)).apply() }
+}
+
+// ============================================================
+//  DOMAIN MODELS
+// ============================================================
+enum class Season(val label: Tx) {
+    KHARIF(Tx("Kharif", "खरीफ")),
+    RABI(Tx("Rabi", "रबी")),
+    ZAID(Tx("Zaid", "जायद")),
+    ANNUAL(Tx("Annual", "वार्षिक"))
+}
+
+data class Crop(
+    val id: String,
+    val emoji: String,
+    val name: Tx,
+    val season: Season,
+    val sowing: Tx,
+    val harvest: Tx,
+    val duration: Tx,
+    val water: Tx,
+    val soil: Tx,
+    val tips: List<Tx>
+)
+
+data class Scheme(
+    val id: String,
+    val emoji: String,
+    val name: Tx,
+    val short: Tx,
+    val benefits: Tx,
+    val eligibility: Tx,
+    val apply: Tx,
+    val url: String,
+    val helpline: String? = null,
+    val helplineLabel: String? = null
+)
+
+data class Helpline(val name: Tx, val number: String, val display: String)
+
+data class MandiRate(
+    val cropId: String,
+    val mandi: String,
+    val state: String,
+    val min: Int,
+    val max: Int,
+    val modal: Int,
+    val changePct: Double
+) {
+    val id: String get() = "$cropId|$mandi"
+}
+
+data class ForecastDay(val day: Tx, val emoji: String, val high: Int, val low: Int, val rain: Int)
+
+data class Weather(
+    val emoji: String,
+    val tempC: Int,
+    val condition: Tx,
+    val humidity: Int,
+    val windKmh: Int,
+    val rainChance: Int,
+    val forecast: List<ForecastDay>
+)
+
+// ============================================================
+//  DATA LAYER  (Repository pattern)
+// ============================================================
+interface FarmRepository {
+    val isDemo: Boolean
+    suspend fun weather(): Weather
+    suspend fun mandiRates(): List<MandiRate>
+}
+
+/** Offline demo data. Replace with ApiFarmRepository for live data (Agmarknet / Open-Meteo etc). */
+class DemoFarmRepository : FarmRepository {
+    override val isDemo = true
+
+    override suspend fun weather(): Weather {
+        delay(700)
+        return Weather(
+            emoji = "⛅", tempC = 31, condition = Tx("Partly cloudy", "आंशिक बादल"),
+            humidity = 62, windKmh = 12, rainChance = 20,
+            forecast = listOf(
+                ForecastDay(Tx("Fri", "शुक्र"), "🌤️", 33, 22, 10),
+                ForecastDay(Tx("Sat", "शनि"), "⛅", 32, 22, 20),
+                ForecastDay(Tx("Sun", "रवि"), "🌧️", 29, 21, 70),
+                ForecastDay(Tx("Mon", "सोम"), "🌦️", 28, 20, 50),
+                ForecastDay(Tx("Tue", "मंगल"), "☀️", 31, 21, 5)
+            )
+        )
+    }
+
+    override suspend fun mandiRates(): List<MandiRate> {
+        delay(900)
+        return listOf(
+            MandiRate("wheat", "Indore", "Madhya Pradesh", 2400, 2650, 2520, 1.2),
+            MandiRate("wheat", "Karnal", "Haryana", 2450, 2700, 2580, 0.8),
+            MandiRate("paddy", "Raipur", "Chhattisgarh", 2200, 2450, 2320, -0.6),
+            MandiRate("paddy", "Karnal", "Haryana", 2300, 2550, 2430, 0.4),
+            MandiRate("maize", "Davangere", "Karnataka", 2000, 2350, 2210, -1.1),
+            MandiRate("cotton", "Rajkot", "Gujarat", 6800, 7600, 7250, 2.1),
+            MandiRate("soybean", "Indore", "Madhya Pradesh", 4300, 4900, 4620, 1.7),
+            MandiRate("mustard", "Alwar", "Rajasthan", 5400, 6100, 5780, 0.9),
+            MandiRate("potato", "Agra", "Uttar Pradesh", 1100, 1700, 1420, -3.2),
+            MandiRate("onion", "Lasalgaon", "Maharashtra", 1400, 2300, 1850, 4.5),
+            MandiRate("moong", "Latur", "Maharashtra", 6800, 7600, 7200, 0.5)
+        )
+    }
+}
+
+fun weatherAdvisory(w: Weather): Tx = when {
+    w.rainChance >= 60 -> Tx(
+        "Rain likely today. Postpone spraying and fertilizer; keep field drains clear.",
+        "आज बारिश की संभावना है। छिड़काव और खाद टालें; खेत की नालियां साफ रखें।"
+    )
+    w.windKmh >= 25 -> Tx(
+        "Strong winds. Avoid pesticide spraying today.",
+        "तेज़ हवा है। आज कीटनाशक का छिड़काव न करें।"
+    )
+    w.tempC >= 38 -> Tx(
+        "Very hot. Irrigate in the evening and protect young plants.",
+        "बहुत गर्मी है। शाम को सिंचाई करें और छोटे पौधों को बचाएं।"
+    )
+    else -> Tx(
+        "Good conditions for field work. Spray in early morning or evening.",
+        "खेत के काम के लिए अच्छा मौसम। छिड़काव सुबह जल्दी या शाम को करें।"
+    )
+}
+
+// ============================================================
+//  STATIC CONTENT  (crops, schemes, helplines, tips)
+// ============================================================
+object Catalog {
+    fun cropById(id: String): Crop? = crops.firstOrNull { it.id == id }
+
+    val crops = listOf(
+        Crop(
+            "wheat", "🌾", Tx("Wheat", "गेहूं"), Season.RABI,
+            Tx("Late Oct – Nov", "अक्टूबर अंत – नवंबर"), Tx("Mar – Apr", "मार्च – अप्रैल"),
+            Tx("120–150 days", "120–150 दिन"),
+            Tx("4–6 irrigations; crown-root stage (20–25 days) is critical", "4–6 सिंचाई; ताज-जड़ अवस्था (20–25 दिन) सबसे ज़रूरी"),
+            Tx("Well-drained loam to clay loam", "अच्छे जल-निकास वाली दोमट से चिकनी दोमट"),
+            listOf(
+                Tx("Use certified seed and treat it before sowing", "प्रमाणित बीज लें और बुवाई से पहले उपचारित करें"),
+                Tx("Sow on time — late sowing lowers yield", "समय पर बुवाई करें — देर से बुवाई में पैदावार घटती है"),
+                Tx("Irrigate at crown-root stage and at flowering", "ताज-जड़ और फूल आने की अवस्था में सिंचाई करें")
+            )
+        ),
+        Crop(
+            "paddy", "🍚", Tx("Paddy (Rice)", "धान (चावल)"), Season.KHARIF,
+            Tx("Nursery May–Jun; transplant Jun–Jul", "नर्सरी मई–जून; रोपाई जून–जुलाई"), Tx("Oct – Nov", "अक्टूबर – नवंबर"),
+            Tx("110–150 days", "110–150 दिन"),
+            Tx("Standing water; frequent irrigation", "खड़ा पानी; बार-बार सिंचाई"),
+            Tx("Clay or clay loam that holds water", "पानी रोकने वाली चिकनी या चिकनी दोमट"),
+            listOf(
+                Tx("Keep a thin layer of water (about 5 cm) after transplanting", "रोपाई के बाद लगभग 5 सेमी पानी रखें"),
+                Tx("Transplant 20–25 day old seedlings", "20–25 दिन की पौध की रोपाई करें"),
+                Tx("Drain the field about 10 days before harvest", "कटाई से लगभग 10 दिन पहले खेत का पानी निकाल दें")
+            )
+        ),
+        Crop(
+            "maize", "🌽", Tx("Maize", "मक्का"), Season.KHARIF,
+            Tx("Jun – Jul", "जून – जुलाई"), Tx("Sep – Oct", "सितंबर – अक्टूबर"),
+            Tx("90–110 days", "90–110 दिन"),
+            Tx("Moisture at tasseling and silking is critical", "मंजरी और रेशे निकलने पर नमी ज़रूरी"),
+            Tx("Well-drained loam", "अच्छे जल-निकास वाली दोमट"),
+            listOf(
+                Tx("Ensure good drainage — maize cannot tolerate waterlogging", "जल-निकास अच्छा रखें — मक्का जलभराव सहन नहीं करता"),
+                Tx("Weed in the first 30–35 days", "पहले 30–35 दिन में निराई-गुड़ाई करें"),
+                Tx("Scout regularly for fall armyworm", "फॉल आर्मीवर्म के लिए नियमित निरीक्षण करें")
+            )
+        ),
+        Crop(
+            "cotton", "☁️", Tx("Cotton", "कपास"), Season.KHARIF,
+            Tx("Apr – Jun", "अप्रैल – जून"), Tx("Oct – Jan (multiple pickings)", "अक्टूबर – जनवरी (कई चुनाई)"),
+            Tx("150–180 days", "150–180 दिन"),
+            Tx("Critical at flowering and boll formation", "फूल और टिंडे बनने के समय ज़रूरी"),
+            Tx("Deep black (regur) or well-drained loam", "गहरी काली (रेगुर) या अच्छे जल-निकास वाली दोमट"),
+            listOf(
+                Tx("Choose varieties suited to your region and soil", "अपने क्षेत्र और मिट्टी के अनुसार किस्म चुनें"),
+                Tx("Check for bollworm and whitefly every week", "हर सप्ताह सुंडी और सफेद मक्खी की जांच करें"),
+                Tx("Pick only fully opened, dry bolls", "पूरी तरह खिले, सूखे टिंडों से ही कपास चुनें")
+            )
+        ),
+        Crop(
+            "soybean", "🫘", Tx("Soybean", "सोयाबीन"), Season.KHARIF,
+            Tx("Jun – Jul", "जून – जुलाई"), Tx("Sep – Oct", "सितंबर – अक्टूबर"),
+            Tx("90–110 days", "90–110 दिन"),
+            Tx("Mostly rainfed; irrigate at pod filling if dry", "ज़्यादातर बारिश पर निर्भर; सूखे में फली भरते समय सिंचाई"),
+            Tx("Medium black soil or loam, well-drained", "मध्यम काली मिट्टी या दोमट, जल-निकास वाली"),
+            listOf(
+                Tx("Treat seed with Rhizobium culture and a fungicide", "बीज को राइज़ोबियम कल्चर और फफूंदनाशक से उपचारित करें"),
+                Tx("Sow after the monsoon is well established", "मानसून अच्छी तरह आने के बाद बुवाई करें"),
+                Tx("Avoid waterlogging; make drainage furrows", "जलभराव से बचें; जल-निकास की नालियां बनाएं")
+            )
+        ),
+        Crop(
+            "mustard", "🌼", Tx("Mustard", "सरसों"), Season.RABI,
+            Tx("October", "अक्टूबर"), Tx("Feb – Mar", "फरवरी – मार्च"),
+            Tx("110–140 days", "110–140 दिन"),
+            Tx("1–3 light irrigations", "1–3 हल्की सिंचाई"),
+            Tx("Light to medium loam", "हल्की से मध्यम दोमट"),
+            listOf(
+                Tx("Sow in October for best yield", "अच्छी पैदावार के लिए अक्टूबर में बुवाई करें"),
+                Tx("Thin plants 15–20 days after sowing", "बुवाई के 15–20 दिन बाद पौधों की छंटाई करें"),
+                Tx("Watch for aphids in cold, cloudy weather", "ठंडे, बादल वाले मौसम में माहू (एफिड) पर नज़र रखें")
+            )
+        ),
+        Crop(
+            "potato", "🥔", Tx("Potato", "आलू"), Season.RABI,
+            Tx("Oct – Nov", "अक्टूबर – नवंबर"), Tx("Jan – Mar", "जनवरी – मार्च"),
+            Tx("90–110 days", "90–110 दिन"),
+            Tx("Light, frequent irrigation; avoid waterlogging", "हल्की, बार-बार सिंचाई; जलभराव से बचें"),
+            Tx("Loose, well-drained sandy loam", "भुरभुरी, जल-निकास वाली बलुई दोमट"),
+            listOf(
+                Tx("Use disease-free seed tubers", "रोगमुक्त बीज कंद इस्तेमाल करें"),
+                Tx("Do earthing up 25–30 days after planting", "रोपाई के 25–30 दिन बाद मिट्टी चढ़ाएं"),
+                Tx("Protect from late blight in foggy, humid weather", "कोहरे और नमी में झुलसा रोग से बचाव करें")
+            )
+        ),
+        Crop(
+            "onion", "🧅", Tx("Onion", "प्याज"), Season.RABI,
+            Tx("Nursery Oct–Nov; transplant Dec–Jan", "नर्सरी अक्टूबर–नवंबर; रोपाई दिसंबर–जनवरी"), Tx("Apr – May", "अप्रैल – मई"),
+            Tx("120–150 days", "120–150 दिन"),
+            Tx("Light, frequent irrigation", "हल्की, बार-बार सिंचाई"),
+            Tx("Well-drained loam rich in organic matter", "जैविक पदार्थ से भरपूर, जल-निकास वाली दोमट"),
+            listOf(
+                Tx("Transplant 40–50 day old seedlings", "40–50 दिन की पौध की रोपाई करें"),
+                Tx("Stop irrigation 10–15 days before harvest", "कटाई से 10–15 दिन पहले सिंचाई बंद करें"),
+                Tx("Cure bulbs in shade before storage", "भंडारण से पहले प्याज को छाया में सुखाएं")
+            )
+        ),
+        Crop(
+            "sugarcane", "🎋", Tx("Sugarcane", "गन्ना"), Season.ANNUAL,
+            Tx("Feb – Mar (spring), Oct (autumn)", "फरवरी – मार्च (बसंत), अक्टूबर (शरद)"), Tx("10–18 months after planting", "रोपाई के 10–18 महीने बाद"),
+            Tx("10–18 months", "10–18 महीने"),
+            Tx("High water need; regular irrigation", "पानी की ज़्यादा ज़रूरत; नियमित सिंचाई"),
+            Tx("Deep, fertile loam", "गहरी, उपजाऊ दोमट"),
+            listOf(
+                Tx("Use healthy, disease-free setts", "स्वस्थ, रोगमुक्त बीज गन्ने के टुकड़े (सेट) लें"),
+                Tx("Trash mulching saves moisture and controls weeds", "पत्तियों की मल्चिंग से नमी बचती है और खरपतवार कम होते हैं"),
+                Tx("Plan a ratoon crop to cut planting cost", "रेटून फसल लेकर बुवाई का खर्च घटाएं")
+            )
+        ),
+        Crop(
+            "moong", "🌿", Tx("Moong (Green gram)", "मूंग"), Season.ZAID,
+            Tx("Mar – Apr (also Jun–Jul as Kharif)", "मार्च – अप्रैल (खरीफ में जून–जुलाई)"), Tx("May – Jun", "मई – जून"),
+            Tx("60–70 days", "60–70 दिन"),
+            Tx("2–3 light irrigations in summer", "गर्मी में 2–3 हल्की सिंचाई"),
+            Tx("Sandy loam to loam", "बलुई दोमट से दोमट"),
+            listOf(
+                Tx("Short-duration crop that fits between main seasons", "कम अवधि की फसल जो दो मुख्य फसलों के बीच फिट होती है"),
+                Tx("Fixes nitrogen and improves the soil", "नाइट्रोजन स्थिर कर मिट्टी सुधारती है"),
+                Tx("Control whitefly to prevent yellow mosaic virus", "सफेद मक्खी रोककर पीला मोज़ेक रोग से बचाएं")
+            )
+        )
+    )
+
+    val schemes = listOf(
+        Scheme(
+            "pmkisan", "💵", Tx("PM-KISAN", "पीएम-किसान"),
+            Tx("Direct income support for farmer families", "किसान परिवारों को सीधी आय सहायता"),
+            Tx("₹6,000 per year in three equal instalments of ₹2,000, sent directly to the farmer's bank account.",
+                "प्रति वर्ष ₹6,000, तीन समान किस्तों (₹2,000 प्रत्येक) में सीधे किसान के बैंक खाते में।"),
+            Tx("Landholding farmer families, subject to the scheme's exclusion rules. An Aadhaar-linked bank account and e-KYC are required.",
+                "भूमिधारक किसान परिवार, योजना के बहिष्करण नियमों के अनुसार। आधार से जुड़ा बैंक खाता और ई-केवाईसी ज़रूरी है।"),
+            Tx("Register on the PM-KISAN portal or through your nearest CSC / agriculture office, then complete e-KYC.",
+                "पीएम-किसान पोर्टल पर या नज़दीकी सीएससी / कृषि कार्यालय से पंजीकरण करें, फिर ई-केवाईसी पूरी करें।"),
+            "https://pmkisan.gov.in", "155261", "155261"
+        ),
+        Scheme(
+            "pmfby", "🛡️", Tx("PM Fasal Bima Yojana", "पीएम फसल बीमा योजना"),
+            Tx("Crop insurance against loss", "नुकसान से फसल बीमा सुरक्षा"),
+            Tx("Insurance cover against crop loss from natural calamities, pests and diseases. Farmer premium is capped at 2% (Kharif food and oilseed), 1.5% (Rabi) and 5% (commercial / horticulture crops).",
+                "प्राकृतिक आपदा, कीट और रोग से फसल नुकसान पर बीमा सुरक्षा। किसान का प्रीमियम 2% (खरीफ अनाज/तिलहन), 1.5% (रबी) और 5% (वाणिज्यिक/बागवानी फसलें) तक सीमित है।"),
+            Tx("Farmers growing notified crops in notified areas, including sharecroppers and tenant farmers.",
+                "अधिसूचित क्षेत्रों में अधिसूचित फसल उगाने वाले किसान, बटाईदार और किरायेदार किसान सहित।"),
+            Tx("Apply through your bank, CSC or the PMFBY portal before the cut-off date for the season.",
+                "सीज़न की अंतिम तारीख से पहले अपने बैंक, सीएससी या पीएमएफबीवाई पोर्टल से आवेदन करें।"),
+            "https://pmfby.gov.in", "14447", "14447"
+        ),
+        Scheme(
+            "kcc", "💳", Tx("Kisan Credit Card (KCC)", "किसान क्रेडिट कार्ड (केसीसी)"),
+            Tx("Easy low-interest farm credit", "आसान, कम ब्याज पर खेती का कर्ज़"),
+            Tx("Short-term credit for cultivation and allied activities, with interest subvention on timely repayment that lowers the effective interest rate.",
+                "खेती और संबद्ध कामों के लिए अल्पकालिक कर्ज़; समय पर चुकाने पर ब्याज छूट मिलती है जिससे प्रभावी ब्याज दर घटती है।"),
+            Tx("Farmers, tenant farmers, sharecroppers and self-help groups engaged in farming or allied activities.",
+                "खेती या संबद्ध कामों में लगे किसान, किरायेदार किसान, बटाईदार और स्वयं सहायता समूह।"),
+            Tx("Visit any bank branch (commercial, cooperative or regional rural bank) with ID, land records and a photograph.",
+                "पहचान पत्र, ज़मीन के दस्तावेज़ और फोटो लेकर किसी भी बैंक शाखा (वाणिज्यिक, सहकारी या ग्रामीण बैंक) में जाएं।"),
+            "https://www.myscheme.gov.in"
+        ),
+        Scheme(
+            "shc", "🧪", Tx("Soil Health Card", "मृदा स्वास्थ्य कार्ड"),
+            Tx("Free soil test and fertilizer advice", "मुफ़्त मिट्टी जांच और खाद की सलाह"),
+            Tx("Free soil testing with crop-wise nutrient and fertilizer recommendations, helping you cut input cost and improve yield.",
+                "मुफ़्त मिट्टी जांच और फसल के अनुसार पोषक तत्व व खाद की सिफ़ारिश, जिससे लागत घटती है और पैदावार बढ़ती है।"),
+            Tx("All farmers.", "सभी किसान।"),
+            Tx("Contact your local agriculture department or Krishi Vigyan Kendra, or use the Soil Health Card portal.",
+                "अपने कृषि विभाग या कृषि विज्ञान केंद्र से संपर्क करें, या मृदा स्वास्थ्य कार्ड पोर्टल का उपयोग करें।"),
+            "https://soilhealth.dac.gov.in"
+        ),
+        Scheme(
+            "enam", "🏪", Tx("eNAM – Online Mandi", "ई-नाम – ऑनलाइन मंडी"),
+            Tx("Sell your crop on a national online market", "राष्ट्रीय ऑनलाइन बाज़ार में फसल बेचें"),
+            Tx("A national electronic market linking APMC mandis for transparent price discovery and direct online payment.",
+                "एपीएमसी मंडियों को जोड़ने वाला राष्ट्रीय इलेक्ट्रॉनिक बाज़ार — पारदर्शी भाव और सीधा ऑनलाइन भुगतान।"),
+            Tx("Farmers with a bank account and mobile number, selling at an eNAM-integrated mandi.",
+                "बैंक खाते और मोबाइल नंबर वाले किसान, जो ई-नाम से जुड़ी मंडी में बेचते हैं।"),
+            Tx("Register on the eNAM portal or at your nearest eNAM mandi.",
+                "ई-नाम पोर्टल पर या नज़दीकी ई-नाम मंडी में पंजीकरण करें।"),
+            "https://enam.gov.in"
+        ),
+        Scheme(
+            "kusum", "☀️", Tx("PM-KUSUM (Solar Pumps)", "पीएम-कुसुम (सोलर पंप)"),
+            Tx("Subsidy for solar irrigation pumps", "सोलर सिंचाई पंप पर सब्सिडी"),
+            Tx("Subsidy support for solar irrigation pumps and for solarising existing pumps, cutting diesel and electricity costs.",
+                "सोलर सिंचाई पंप और मौजूदा पंपों के सोलराइज़ेशन पर सब्सिडी, जिससे डीज़ल और बिजली का खर्च घटता है।"),
+            Tx("Individual farmers, groups and cooperatives, as per state rules.",
+                "व्यक्तिगत किसान, समूह और सहकारी समितियां — राज्य के नियमों के अनुसार।"),
+            Tx("Apply through your state nodal agency or the PM-KUSUM state portal.",
+                "अपनी राज्य नोडल एजेंसी या पीएम-कुसुम के राज्य पोर्टल से आवेदन करें।"),
+            "https://pmkusum.mnre.gov.in"
+        )
+    )
+
+    val helplines = listOf(
+        Helpline(Tx("Kisan Call Centre", "किसान कॉल सेंटर"), "18001801551", "1800-180-1551"),
+        Helpline(Tx("PM-KISAN Helpline", "पीएम-किसान हेल्पलाइन"), "155261", "155261"),
+        Helpline(Tx("Crop Insurance (PMFBY)", "फसल बीमा (पीएमएफबीवाई)"), "14447", "14447"),
+        Helpline(Tx("Emergency", "आपातकालीन सेवा"), "112", "112")
+    )
+
+    val tips = listOf(
+        Tx("Test your soil every 2–3 years before deciding fertilizer.", "खाद तय करने से पहले हर 2–3 साल में मिट्टी की जांच कराएं।"),
+        Tx("Spray pesticides early morning or evening, never in strong wind.", "कीटनाशक सुबह जल्दी या शाम को छिड़कें, तेज़ हवा में कभी नहीं।"),
+        Tx("Drip or sprinkler irrigation can save a large share of water.", "ड्रिप या स्प्रिंकलर सिंचाई से काफ़ी पानी बचता है।"),
+        Tx("Rotate crops — pulses after cereals restore soil nitrogen.", "फसल चक्र अपनाएं — अनाज के बाद दलहन से मिट्टी में नाइट्रोजन लौटता है।"),
+        Tx("Compare rates in two or three mandis before you sell.", "बेचने से पहले दो-तीन मंडियों के भाव की तुलना करें।"),
+        Tx("Keep written records of cost and income for every crop.", "हर फसल के खर्च और आमदनी का लिखित हिसाब रखें।"),
+        Tx("Dry grain properly before storage to avoid fungus and loss.", "भंडारण से पहले अनाज अच्छी तरह सुखाएं ताकि फफूंद और नुकसान न हो।"),
+        Tx("Insure your crop before the cut-off date every season.", "हर सीज़न में अंतिम तारीख से पहले फसल का बीमा कराएं।")
+    )
+}
+
+// ============================================================
+//  UI STATE + HELPERS
+// ============================================================
+sealed interface UiState<out T> {
+    object Loading : UiState<Nothing>
+    data class Success<T>(val data: T) : UiState<T>
+    data class Error(val message: String) : UiState<Nothing>
+}
+
+@Composable
+fun <T> loadState(reloadKey: Int, loader: suspend () -> T): UiState<T> {
+    var state by remember(reloadKey) { mutableStateOf<UiState<T>>(UiState.Loading) }
+    LaunchedEffect(reloadKey) {
+        state = try {
+            UiState.Success(loader())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            UiState.Error(e.message ?: "Error")
+        }
+    }
+    return state
+}
+
+enum class AppTab(val emoji: String, val label: Tx) {
+    HOME("🏠", Tx("Home", "होम")),
+    MANDI("💰", Tx("Mandi", "मंडी")),
+    CROPS("🌱", Tx("Crops", "फसलें")),
+    SCHEMES("🏛️", Tx("Schemes", "योजनाएं")),
+    MORE("☰", Tx("More", "और"))
+}
+
+sealed interface Detail {
+    data class CropD(val crop: Crop) : Detail
+    data class SchemeD(val scheme: Scheme) : Detail
+    object Calculator : Detail
+    object Support : Detail
+    object About : Detail
+}
+
+private val rupeeFormat: NumberFormat = NumberFormat.getInstance(Locale("en", "IN"))
+
+fun rupee(n: Number): String {
+    val v = n.toDouble().toLong()
+    return (if (v < 0) "-₹" else "₹") + rupeeFormat.format(abs(v))
+}
+
+fun Context.dial(number: String) {
+    runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))) }
+}
+
+fun Context.openUrl(url: String) {
+    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+fun Context.shareText(text: String) {
+    val i = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    runCatching { startActivity(Intent.createChooser(i, null)) }
+}
+
+fun Context.emailUs(to: String, subject: String) {
+    val i = Intent(Intent.ACTION_SENDTO).apply {
+        data = Uri.parse("mailto:$to")
+        putExtra(Intent.EXTRA_SUBJECT, subject)
+    }
+    runCatching { startActivity(i) }
+}
+
+// ============================================================
+//  THEME
+// ============================================================
+private val LightScheme = lightColorScheme(
+    primary = Color(0xFF2E7D32), onPrimary = Color.White,
+    primaryContainer = Color(0xFFDDEFDC), onPrimaryContainer = Color(0xFF0B2E0F),
+    secondary = Color(0xFFEF6C00), tertiary = Color(0xFF1565C0),
+    background = Color(0xFFF5F8F4), onBackground = Color(0xFF1A1C19),
+    surface = Color.White, onSurface = Color(0xFF1A1C19),
+    surfaceVariant = Color(0xFFE6EDE3), onSurfaceVariant = Color(0xFF424940)
+)
+
+private val DarkScheme = darkColorScheme(
+    primary = Color(0xFF81C784), onPrimary = Color(0xFF003910),
+    primaryContainer = Color(0xFF1F4D24), onPrimaryContainer = Color(0xFFD7F0D6),
+    secondary = Color(0xFFFFB74D), tertiary = Color(0xFF90CAF9),
+    background = Color(0xFF101410), onBackground = Color(0xFFE2E3DD),
+    surface = Color(0xFF181D18), onSurface = Color(0xFFE2E3DD),
+    surfaceVariant = Color(0xFF2A322A), onSurfaceVariant = Color(0xFFC2C9BD)
+)
+
+@Composable
+fun KisanTheme(dark: Boolean, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = if (dark) DarkScheme else LightScheme, content = content)
+}
+
+// ============================================================
+//  ROOT APP
+// ============================================================
+@Composable
+fun KisanSathiApp() {
+    val context = LocalContext.current
+    val prefs = remember { AppPrefs(context) }
+    val repo: FarmRepository = remember { DemoFarmRepository() } // TODO: swap with ApiFarmRepository()
+
+    var hindi by remember { mutableStateOf(prefs.isHindi) }
+    var themeMode by remember { mutableStateOf(prefs.themeMode) }
+    var favorites by remember { mutableStateOf(prefs.favorites) }
+    var tabIndex by rememberSaveable { mutableStateOf(0) }
+    var detail by remember { mutableStateOf<Detail?>(null) }
+    var reloadKey by rememberSaveable { mutableStateOf(0) }
+
+    val weatherState = loadState(reloadKey) { repo.weather() }
+    val mandiState = loadState(reloadKey) { repo.mandiRates() }
+
+    val dark = when (themeMode) {
+        1 -> false
+        2 -> true
+        else -> isSystemInDarkTheme()
+    }
+
+    val tab = AppTab.values()[tabIndex]
+    val toggleFav: (String) -> Unit = { id ->
+        favorites = if (id in favorites) favorites - id else favorites + id
+        prefs.favorites = favorites
+    }
+
+    BackHandler(enabled = detail != null) { detail = null }
+    BackHandler(enabled = detail == null && tab != AppTab.HOME) { tabIndex = 0 }
+
+    CompositionLocalProvider(LocalHindi provides hindi) {
+        KisanTheme(dark) {
+            val cs = MaterialTheme.colorScheme
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            val d = detail
+                            if (d == null) {
+                                Column {
+                                    Text("Kisan Sathi", fontWeight = FontWeight.Bold)
+                                    Text(tr("Your farming companion", "आपका खेती का साथी"), fontSize = 12.sp)
+                                }
+                            } else {
+                                Text(
+                                    when (d) {
+                                        is Detail.CropD -> d.crop.name.t()
+                                        is Detail.SchemeD -> d.scheme.name.t()
+                                        Detail.Calculator -> tr("Profit Calculator", "मुनाफ़ा कैलकुलेटर")
+                                        Detail.Support -> tr("Support a Farmer", "किसान की मदद करें")
+                                        Detail.About -> tr("About", "जानकारी")
+                                    },
+                                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        },
+                        navigationIcon = {
+                            if (detail != null) {
+                                IconButton(onClick = { detail = null }) {
+                                    Text("←", color = cs.onPrimary, fontSize = 24.sp)
+                                }
+                            }
+                        },
+                        actions = {
+                            TextButton(onClick = { hindi = !hindi; prefs.isHindi = hindi }) {
+                                Text(if (hindi) "EN" else "हिं", color = cs.onPrimary, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = cs.primary,
+                            titleContentColor = cs.onPrimary,
+                            navigationIconContentColor = cs.onPrimary,
+                            actionIconContentColor = cs.onPrimary
+                        )
+                    )
+                },
+                bottomBar = {
+                    if (detail == null) {
+                        NavigationBar {
+                            AppTab.values().forEach { t ->
+                                NavigationBarItem(
+                                    selected = tab == t,
+                                    onClick = { tabIndex = t.ordinal },
+                                    icon = { Text(t.emoji, fontSize = 20.sp) },
+                                    label = { Text(t.label.t(), maxLines = 1, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
+                }
+            ) { padding ->
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(cs.background)
+                        .padding(padding)
+                ) {
+                    val d = detail
+                    if (d != null) {
+                        when (d) {
+                            is Detail.CropD -> {
+                                val price = (mandiState as? UiState.Success)?.data
+                                    ?.firstOrNull { it.cropId == d.crop.id }
+                                CropDetail(d.crop, price, repo.isDemo)
+                            }
+                            is Detail.SchemeD -> SchemeDetail(d.scheme)
+                            Detail.Calculator -> CalculatorScreen()
+                            Detail.Support -> SupportScreen()
+                            Detail.About -> AboutScreen()
+                        }
+                    } else {
+                        when (tab) {
+                            AppTab.HOME -> HomeScreen(
+                                weatherState, mandiState, repo.isDemo,
+                                onRetry = { reloadKey++ },
+                                goTab = { tabIndex = it.ordinal },
+                                open = { detail = it }
+                            )
+                            AppTab.MANDI -> MandiScreen(
+                                mandiState, favorites, repo.isDemo,
+                                onFav = toggleFav, onRetry = { reloadKey++ }
+                            )
+                            AppTab.CROPS -> CropsScreen(open = { detail = it })
+                            AppTab.SCHEMES -> SchemesScreen(open = { detail = it })
+                            AppTab.MORE -> MoreScreen(
+                                themeMode = themeMode,
+                                onHindi = { hindi = it; prefs.isHindi = it },
+                                hindi = hindi,
+                                onTheme = { themeMode = it; prefs.themeMode = it },
+                                open = { detail = it }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+//  REUSABLE COMPONENTS
+// ============================================================
+@Composable
+fun AppCard(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    container: Color = MaterialTheme.colorScheme.surface,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(18.dp)
+    val colors = CardDefaults.cardColors(containerColor = container)
+    val elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    if (onClick != null) {
+        Card(
+            onClick = onClick, modifier = modifier.fillMaxWidth(), shape = shape,
+            colors = colors, elevation = elevation, content = content
+        )
+    } else {
+        Card(
+            modifier = modifier.fillMaxWidth(), shape = shape,
+            colors = colors, elevation = elevation, content = content
+        )
+    }
+}
+
+@Composable
+fun SectionTitle(text: String) {
+    Text(text, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+}
+
+@Composable
+fun EmojiBadge(emoji: String, size: Dp = 48.dp) {
+    Box(
+        Modifier
+            .size(size)
+            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(emoji, fontSize = (size.value * 0.5f).sp)
+    }
+}
+
+@Composable
+fun ServiceRow(emoji: String, title: String, subtitle: String, onClick: () -> Unit) {
+    AppCard(onClick = onClick) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            EmojiBadge(emoji)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(subtitle, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Text("›", color = MaterialTheme.colorScheme.primary, fontSize = 28.sp)
+        }
+    }
+}
+
+@Composable
+fun LoadingBox() {
+    Box(Modifier.fillMaxWidth().padding(28.dp), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+fun ErrorBox(onRetry: () -> Unit) {
+    AppCard {
+        Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("⚠️", fontSize = 32.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                tr("Couldn't load data. Please check your internet connection.", "डेटा लोड नहीं हो सका। कृपया इंटरनेट कनेक्शन जांचें।"),
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onRetry) { Text(tr("Retry", "फिर कोशिश करें")) }
+        }
+    }
+}
+
+@Composable
+fun DemoBanner() {
+    AppCard(container = MaterialTheme.colorScheme.primaryContainer) {
+        Text(
+            "ℹ️ " + tr(
+                "Sample data shown. Live rates will appear once the data service is connected.",
+                "नमूना डेटा दिखाया जा रहा है। डेटा सेवा जुड़ने पर लाइव भाव दिखेंगे।"
+            ),
+            Modifier.padding(12.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+    }
+}
+
+@Composable
+fun SearchField(value: String, onChange: (String) -> Unit, hint: String) {
+    OutlinedTextField(
+        value = value, onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(), singleLine = true,
+        placeholder = { Text(hint) },
+        leadingIcon = { Text("🔍") },
+        trailingIcon = {
+            if (value.isNotEmpty()) TextButton(onClick = { onChange("") }) { Text("✕") }
+        },
+        shape = RoundedCornerShape(16.dp)
+    )
+}
+
+@Composable
+fun ChipRow(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(options) { (key, label) ->
+            FilterChip(selected = key == selected, onClick = { onSelect(key) }, label = { Text(label) })
+        }
+    }
+}
+
+@Composable
+fun TrendChip(changePct: Double) {
+    val up = changePct >= 0
+    val color = if (up) Color(0xFF2E7D32) else Color(0xFFC62828)
+    Text(
+        (if (up) "▲ " else "▼ ") + String.format(Locale.US, "%.1f%%", abs(changePct)),
+        color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold
+    )
+}
+
+@Composable
+fun MandiCard(r: MandiRate, fav: Boolean, onFav: (() -> Unit)?) {
+    val crop = Catalog.cropById(r.cropId)
+    AppCard {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            EmojiBadge(crop?.emoji ?: "🌱")
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(crop?.name?.t() ?: r.cropId, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("${r.mandi}, ${r.state}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${rupee(r.min)} – ${rupee(r.max)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(rupee(r.modal), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                Text(tr("per quintal", "प्रति क्विंटल"), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TrendChip(r.changePct)
+            }
+            if (onFav != null) {
+                IconButton(onClick = onFav) {
+                    Text(if (fav) "★" else "☆", fontSize = 24.sp, color = MaterialTheme.colorScheme.secondary)
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+//  HOME
+// ============================================================
+@Composable
+fun HomeScreen(
+    weather: UiState<Weather>,
+    mandi: UiState<List<MandiRate>>,
+    isDemo: Boolean,
+    onRetry: () -> Unit,
+    goTab: (AppTab) -> Unit,
+    open: (Detail) -> Unit
+) {
+    val context = LocalContext.current
+    val tipIndex = remember { Calendar.getInstance().get(Calendar.DAY_OF_YEAR) % Catalog.tips.size }
+    val kcc = Catalog.helplines.first()
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item { HeroCard(onMandi = { goTab(AppTab.MANDI) }) }
+        item { WeatherCard(weather, onRetry) }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickTile(Modifier.weight(1f), "💰", tr("Mandi", "मंडी")) { goTab(AppTab.MANDI) }
+                QuickTile(Modifier.weight(1f), "🌱", tr("Crops", "फसलें")) { goTab(AppTab.CROPS) }
+                QuickTile(Modifier.weight(1f), "🏛️", tr("Schemes", "योजनाएं")) { goTab(AppTab.SCHEMES) }
+                QuickTile(Modifier.weight(1f), "🧮", tr("Profit", "मुनाफ़ा")) { open(Detail.Calculator) }
+            }
+        }
+
+        item { SectionTitle(tr("Mandi movers", "मंडी भाव में बदलाव")) }
+        when (mandi) {
+            is UiState.Loading -> item { LoadingBox() }
+            is UiState.Error -> item { ErrorBox(onRetry) }
+            is UiState.Success -> {
+                if (isDemo) item { DemoBanner() }
+                val movers = mandi.data.sortedByDescending { abs(it.changePct) }.take(3)
+                items(movers, key = { it.id }) { MandiCard(it, fav = false, onFav = null) }
+            }
+        }
+
+        item {
+            AppCard(container = MaterialTheme.colorScheme.primaryContainer) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("💡 " + tr("Tip of the day", "आज की सलाह"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Spacer(Modifier.height(6.dp))
+                    Text(Catalog.tips[tipIndex].t(), color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+        }
+
+        item {
+            AppCard {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("📞 " + kcc.name.t(), fontWeight = FontWeight.Bold)
+                        Text(kcc.display + " • " + tr("Toll free", "टोल फ्री"), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Button(onClick = { context.dial(kcc.number) }) { Text(tr("Call", "कॉल करें")) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HeroCard(onMandi: () -> Unit) {
+    val hour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    val greeting = when {
+        hour < 12 -> tr("Good morning", "सुप्रभात")
+        hour < 17 -> tr("Good afternoon", "नमस्कार")
+        else -> tr("Good evening", "शुभ संध्या")
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF1B5E20), Color(0xFF43A047))),
+                RoundedCornerShape(24.dp)
+            )
+            .padding(22.dp)
+    ) {
+        Column {
+            Text(greeting, color = Color.White.copy(alpha = 0.9f))
+            Text(tr("Namaste, Kisan 🙏", "नमस्ते, किसान भाई 🙏"), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(tr("Grow better. Live better.", "बेहतर खेती, बेहतर जीवन।"), color = Color.White.copy(alpha = 0.9f))
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = onMandi,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF1B5E20))
+            ) { Text(tr("Check mandi rates", "मंडी भाव देखें"), fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+@Composable
+fun QuickTile(modifier: Modifier, emoji: String, label: String, onClick: () -> Unit) {
+    AppCard(modifier = modifier, onClick = onClick) {
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(emoji, fontSize = 26.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(label, fontSize = 12.sp, maxLines = 1, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+fun WeatherCard(state: UiState<Weather>, onRetry: () -> Unit) {
+    when (state) {
+        is UiState.Loading -> AppCard { LoadingBox() }
+        is UiState.Error -> ErrorBox(onRetry)
+        is UiState.Success -> {
+            val w = state.data
+            val cs = MaterialTheme.colorScheme
+            AppCard {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(w.emoji, fontSize = 46.sp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("${w.tempC}°C", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                            Text(w.condition.t(), color = cs.onSurfaceVariant)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("💧 ${w.humidity}%", fontSize = 13.sp)
+                            Text("🌬️ ${w.windKmh} km/h", fontSize = 13.sp)
+                            Text("🌧️ ${w.rainChance}%", fontSize = 13.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(cs.primaryContainer, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text("🌱 " + weatherAdvisory(w).t(), color = cs.onPrimaryContainer, fontSize = 14.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        w.forecast.forEach { d ->
+                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(d.day.t(), fontSize = 12.sp, color = cs.onSurfaceVariant)
+                                Text(d.emoji, fontSize = 22.sp)
+                                Text("${d.high}°/${d.low}°", fontSize = 11.sp)
+                                Text("${d.rain}%", fontSize = 10.sp, color = cs.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+//  MANDI
+// ============================================================
+@Composable
+fun MandiScreen(
+    state: UiState<List<MandiRate>>,
+    favorites: Set<String>,
+    isDemo: Boolean,
+    onFav: (String) -> Unit,
+    onRetry: () -> Unit
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf("ALL") }
+    val searchHint = tr("Search crop, mandi or state", "फसल, मंडी या राज्य खोजें")
+    val allLabel = tr("All", "सभी")
+    val savedLabel = tr("★ Saved", "★ सेव्ड")
+    val emptyText = tr("No rates found.", "कोई भाव नहीं मिला।")
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { SearchField(query, { query = it }, searchHint) }
+
+        when (state) {
+            is UiState.Loading -> item { LoadingBox() }
+            is UiState.Error -> item { ErrorBox(onRetry) }
+            is UiState.Success -> {
+                val states = state.data.map { it.state }.distinct().sorted()
+                val options = listOf("ALL" to allLabel, "FAV" to savedLabel) + states.map { it to it }
+                item { ChipRow(options, filter) { filter = it } }
+                if (isDemo) item { DemoBanner() }
+
+                val q = query.trim().lowercase()
+                val list = state.data.filter { r ->
+                    val crop = Catalog.cropById(r.cropId)
+                    val matchQ = q.isEmpty() ||
+                        r.mandi.lowercase().contains(q) ||
+                        r.state.lowercase().contains(q) ||
+                        (crop?.name?.en?.lowercase()?.contains(q) == true) ||
+                        (crop?.name?.hi?.contains(q) == true)
+                    val matchF = when (filter) {
+                        "ALL" -> true
+                        "FAV" -> r.id in favorites
+                        else -> r.state == filter
+                    }
+                    matchQ && matchF
+                }
+
+                if (list.isEmpty()) {
+                    item {
+                        Text(emptyText, Modifier.fillMaxWidth().padding(24.dp), textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    items(list, key = { it.id }) { r ->
+                        MandiCard(r, fav = r.id in favorites, onFav = { onFav(r.id) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+//  CROPS
+// ============================================================
+@Composable
+fun CropsScreen(open: (Detail) -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf("ALL") }
+    val searchHint = tr("Search crops", "फसल खोजें")
+    val options = listOf("ALL" to tr("All", "सभी")) + Season.values().map { it.name to it.label.t() }
+    val q = query.trim().lowercase()
+    val list = Catalog.crops.filter { c ->
+        (filter == "ALL" || c.season.name == filter) &&
+            (q.isEmpty() || c.name.en.lowercase().contains(q) || c.name.hi.contains(q))
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { SearchField(query, { query = it }, searchHint) }
+        item { ChipRow(options, filter) { filter = it } }
+        items(list, key = { it.id }) { c ->
+            ServiceRow(c.emoji, c.name.t(), c.season.label.t() + " • " + c.duration.t()) { open(Detail.CropD(c)) }
+        }
+    }
+}
+
+@Composable
+fun DetailRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(label, Modifier.weight(0.35f), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+        Text(value, Modifier.weight(0.65f), fontSize = 14.sp)
+    }
+}
+
+@Composable
+fun CropDetail(crop: Crop, price: MandiRate?, isDemo: Boolean) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            EmojiBadge(crop.emoji, 64.dp)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(crop.name.t(), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text(crop.season.label.t(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        if (price != null) {
+            AppCard(container = MaterialTheme.colorScheme.primaryContainer) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            tr("Mandi price", "मंडी भाव") + if (isDemo) tr(" (sample)", " (नमूना)") else "",
+                            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text("${price.mandi}, ${price.state}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                    Text(rupee(price.modal) + tr("/qtl", "/क्विं."), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+        }
+
+        AppCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                DetailRow(tr("Sowing", "बुवाई"), crop.sowing.t())
+                DetailRow(tr("Harvest", "कटाई"), crop.harvest.t())
+                DetailRow(tr("Duration", "अवधि"), crop.duration.t())
+                DetailRow(tr("Water", "पानी"), crop.water.t())
+                DetailRow(tr("Soil", "मिट्टी"), crop.soil.t())
+            }
+        }
+
+        SectionTitle(tr("Farming tips", "खेती की सलाह"))
+        crop.tips.forEach { tip ->
+            AppCard { Text("✅  " + tip.t(), Modifier.padding(14.dp)) }
+        }
+
+        Text(
+            tr("Dates vary by region and variety. Confirm with your local Krishi Vigyan Kendra.",
+                "तिथियां क्षेत्र और किस्म के अनुसार बदलती हैं। अपने कृषि विज्ञान केंद्र से पुष्टि करें।"),
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// ============================================================
+//  SCHEMES
+// ============================================================
+@Composable
+fun SchemesScreen(open: (Detail) -> Unit) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Column {
+                SectionTitle(tr("Government Schemes", "सरकारी योजनाएं"))
+                Text(
+                    tr("Tap a scheme to see benefits and how to apply.", "लाभ और आवेदन का तरीका देखने के लिए योजना चुनें।"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp
+                )
+            }
+        }
+        items(Catalog.schemes, key = { it.id }) { s ->
+            ServiceRow(s.emoji, s.name.t(), s.short.t()) { open(Detail.SchemeD(s)) }
+        }
+    }
+}
+
+@Composable
+fun InfoBlock(title: String, body: String) {
+    AppCard {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(6.dp))
+            Text(body)
+        }
+    }
+}
+
+@Composable
+fun SchemeDetail(s: Scheme) {
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            EmojiBadge(s.emoji, 64.dp)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(s.name.t(), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(s.short.t(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        InfoBlock(tr("Benefits", "लाभ"), s.benefits.t())
+        InfoBlock(tr("Who can apply", "कौन आवेदन कर सकता है"), s.eligibility.t())
+        InfoBlock(tr("How to apply", "आवेदन कैसे करें"), s.apply.t())
+
+        Button(onClick = { context.openUrl(s.url) }, modifier = Modifier.fillMaxWidth()) {
+            Text("🌐  " + tr("Open official website", "आधिकारिक वेबसाइट खोलें"))
+        }
+        if (s.helpline != null) {
+            OutlinedButton(onClick = { context.dial(s.helpline) }, modifier = Modifier.fillMaxWidth()) {
+                Text("📞  " + tr("Call helpline", "हेल्पलाइन पर कॉल करें") + " ${s.helplineLabel ?: ""}")
+            }
+        }
+        Text(
+            tr("Scheme rules and amounts can change. Always confirm the latest details on the official website.",
+                "योजना के नियम और राशि बदल सकते हैं। नवीनतम जानकारी हमेशा आधिकारिक वेबसाइट पर जांचें।"),
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// ============================================================
+//  MORE  (tools, helplines, settings)
+// ============================================================
+@Composable
+fun MoreScreen(
+    hindi: Boolean,
+    themeMode: Int,
+    onHindi: (Boolean) -> Unit,
+    onTheme: (Int) -> Unit,
+    open: (Detail) -> Unit
+) {
+    val context = LocalContext.current
+    val themeOptions = listOf(
+        "0" to tr("System", "सिस्टम"),
+        "1" to tr("Light", "लाइट"),
+        "2" to tr("Dark", "डार्क")
+    )
+    val langOptions = listOf("en" to "English", "hi" to "हिन्दी")
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { SectionTitle(tr("Tools", "औज़ार")) }
+        item {
+            ServiceRow("🧮", tr("Profit Calculator", "मुनाफ़ा कैलकुलेटर"),
+                tr("Estimate cost, income and profit", "लागत, आमदनी और मुनाफ़े का अनुमान")) { open(Detail.Calculator) }
+        }
+        item {
+            ServiceRow("🤝", tr("Support a Farmer", "किसान की मदद करें"),
+                tr("Help farmers around you", "अपने आस-पास के किसानों की मदद करें")) { open(Detail.Support) }
+        }
+
+        item { SectionTitle(tr("Helplines", "हेल्पलाइन")) }
+        items(Catalog.helplines, key = { it.number }) { h ->
+            ServiceRow("📞", h.name.t(), h.display) { context.dial(h.number) }
+        }
+
+        item { SectionTitle(tr("Settings", "सेटिंग्स")) }
+        item {
+            AppCard {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(tr("Language", "भाषा"), fontWeight = FontWeight.Bold)
+                    ChipRow(langOptions, if (hindi) "hi" else "en") { onHindi(it == "hi") }
+                    Spacer(Modifier.height(4.dp))
+                    Text(tr("Theme", "थीम"), fontWeight = FontWeight.Bold)
+                    ChipRow(themeOptions, themeMode.toString()) { onTheme(it.toInt()) }
+                }
+            }
+        }
+        item {
+            ServiceRow("📤", tr("Share this app", "ऐप शेयर करें"),
+                tr("Tell other farmers about Kisan Sathi", "दूसरे किसानों को किसान साथी के बारे में बताएं")) {
+                context.shareText(AppConfig.SHARE_TEXT)
+            }
+        }
+        item {
+            ServiceRow("ℹ️", tr("About", "जानकारी"), "Kisan Sathi v${AppConfig.VERSION}") { open(Detail.About) }
+        }
+    }
+}
+
+// ============================================================
+//  PROFIT CALCULATOR
+// ============================================================
+@Composable
+fun NumberField(value: String, onChange: (String) -> Unit, label: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { s -> if (s.length <= 10 && s.all { it.isDigit() || it == '.' }) onChange(s) },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp)
+    )
+}
+
+@Composable
+fun ResultLine(label: String, value: String, bold: Boolean = false, color: Color = Color.Unspecified) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
+        Text(value, fontWeight = FontWeight.Bold, color = color)
+    }
+}
+
+@Composable
+fun CalculatorScreen() {
+    var area by rememberSaveable { mutableStateOf("") }
+    var yieldQ by rememberSaveable { mutableStateOf("") }
+    var price by rememberSaveable { mutableStateOf("") }
+    var cost by rememberSaveable { mutableStateOf("") }
+
+    val a = area.toDoubleOrNull()
+    val y = yieldQ.toDoubleOrNull()
+    val p = price.toDoubleOrNull()
+    val c = cost.toDoubleOrNull()
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            tr("Enter your numbers to estimate profit for one crop.", "एक फसल का मुनाफ़ा जानने के लिए अपने आंकड़े भरें।"),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        NumberField(area, { area = it }, tr("Land area (acres)", "ज़मीन (एकड़)"))
+        NumberField(yieldQ, { yieldQ = it }, tr("Expected yield (quintal per acre)", "अनुमानित उपज (क्विंटल प्रति एकड़)"))
+        NumberField(price, { price = it }, tr("Selling price (₹ per quintal)", "बिक्री भाव (₹ प्रति क्विंटल)"))
+        NumberField(cost, { cost = it }, tr("Cost of farming (₹ per acre)", "खेती की लागत (₹ प्रति एकड़)"))
+
+        if (a != null && y != null && p != null && c != null && a > 0) {
+            val totalYield = a * y
+            val revenue = totalYield * p
+            val totalCost = a * c
+            val profit = revenue - totalCost
+            val perAcre = profit / a
+            val breakEven = if (totalYield > 0) totalCost / totalYield else 0.0
+            val good = profit >= 0
+            val profitColor = if (good) Color(0xFF2E7D32) else Color(0xFFC62828)
+
+            AppCard(container = MaterialTheme.colorScheme.primaryContainer) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(tr("Estimate", "अनुमान"), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    ResultLine(tr("Total production", "कुल उत्पादन"), String.format(Locale.US, "%.1f", totalYield) + tr(" qtl", " क्विं."))
+                    ResultLine(tr("Total income", "कुल आमदनी"), rupee(revenue))
+                    ResultLine(tr("Total cost", "कुल लागत"), rupee(totalCost))
+                    HorizontalDivider()
+                    ResultLine(
+                        if (good) tr("Net profit", "शुद्ध मुनाफ़ा") else tr("Net loss", "शुद्ध नुकसान"),
+                        rupee(profit), bold = true, color = profitColor
+                    )
+                    ResultLine(tr("Profit per acre", "मुनाफ़ा प्रति एकड़"), rupee(perAcre))
+                    ResultLine(tr("Break-even price", "ब्रेक-ईवन भाव"), rupee(breakEven) + tr("/qtl", "/क्विं."))
+                }
+            }
+            Text(
+                tr("This is only an estimate. Actual results depend on weather, market price and expenses.",
+                    "यह केवल अनुमान है। असली नतीजे मौसम, बाज़ार भाव और खर्च पर निर्भर करते हैं।"),
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ============================================================
+//  SUPPORT + ABOUT
+// ============================================================
+@Composable
+fun SupportScreen() {
+    val context = LocalContext.current
+    val subject = tr("Kisan Sathi – Volunteer / Support", "किसान साथी – स्वयंसेवक / सहायता")
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("🤝", fontSize = 60.sp)
+            Text(tr("Kisan Support", "किसान सहायता"), fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text(
+                tr("Small steps can make a big difference for a farmer.", "छोटे कदम भी किसान के लिए बड़ा फ़र्क ला सकते हैं।"),
+                textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        SectionTitle(tr("How you can help", "आप कैसे मदद कर सकते हैं"))
+        AppCard { Text("📱  " + tr("Show a farmer how to check mandi rates and weather in this app.", "किसी किसान को इस ऐप में मंडी भाव और मौसम देखना सिखाएं।"), Modifier.padding(14.dp)) }
+        AppCard { Text("📝  " + tr("Help a farmer register for PM-KISAN, eNAM or crop insurance.", "किसी किसान को पीएम-किसान, ई-नाम या फसल बीमा में पंजीकरण में मदद करें।"), Modifier.padding(14.dp)) }
+        AppCard { Text("📤  " + tr("Share the app with farmers in your village.", "अपने गांव के किसानों के साथ ऐप शेयर करें।"), Modifier.padding(14.dp)) }
+
+        Button(onClick = { context.shareText(AppConfig.SHARE_TEXT) }, modifier = Modifier.fillMaxWidth()) {
+            Text("📤  " + tr("Share Kisan Sathi", "किसान साथी शेयर करें"))
+        }
+        OutlinedButton(onClick = { context.emailUs(AppConfig.SUPPORT_EMAIL, subject) }, modifier = Modifier.fillMaxWidth()) {
+            Text("✉️  " + tr("Contact us / Volunteer", "संपर्क करें / स्वयंसेवक बनें"))
+        }
+    }
+}
+
+@Composable
+fun AboutScreen() {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            EmojiBadge("🌾", 80.dp)
+            Spacer(Modifier.height(8.dp))
+            Text("Kisan Sathi", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Text("v${AppConfig.VERSION}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            tr("Kisan Sathi brings weather, mandi rates, crop guides and government schemes together in one simple app for farmers.",
+                "किसान साथी मौसम, मंडी भाव, फसल गाइड और सरकारी योजनाओं को किसानों के लिए एक ही आसान ऐप में लाता है।")
+        )
+        InfoBlock(tr("Farmer first", "किसान सबसे पहले"), tr("Simple screens, Hindi and English, built for everyday use in the field.", "आसान स्क्रीन, हिंदी और अंग्रेज़ी, खेत में रोज़ के इस्तेमाल के लिए बनाया गया।"))
+        InfoBlock(tr("Privacy", "गोपनीयता"), tr("Your language, theme and saved items stay on your phone. The app does not collect personal data.", "आपकी भाषा, थीम और सेव किए गए आइटम आपके फोन में ही रहते हैं। ऐप कोई व्यक्तिगत डेटा इकट्ठा नहीं करता।"))
+        InfoBlock(tr("Disclaimer", "सूचना"), tr("Information is for general guidance only. Please verify mandi rates, scheme details and farming advice with official sources or your local agriculture office before acting.", "जानकारी केवल सामान्य मार्गदर्शन के लिए है। कोई भी कदम उठाने से पहले मंडी भाव, योजना की जानकारी और खेती की सलाह आधिकारिक स्रोत या स्थानीय कृषि कार्यालय से जांच लें।"))
+    }
+}
