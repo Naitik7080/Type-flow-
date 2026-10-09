@@ -1,0 +1,796 @@
+package com.example.myfirstaap
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+private val BrandGreen = Color(0xFF075E54)
+private val BrightGreen = Color(0xFF128C7E)
+private val AccentGreen = Color(0xFF25D366)
+private val ScreenBg = Color(0xFFF7F9F8)
+private val SecondaryText = Color(0xFF667781)
+private val DividerColor = Color(0xFFE9EDEF)
+private val SentMessage = Color(0xFFD9FDD3)
+private val ChatWallpaper = Color(0xFFECE5DD)
+
+data class ChatItem(
+    val id: Int,
+    val name: String,
+    val message: String,
+    val time: String,
+    val unread: Int = 0,
+    val initials: String,
+    val color: Color,
+    val online: Boolean = false,
+    val pinned: Boolean = false,
+    val isGroup: Boolean = false
+)
+
+data class MessageItem(val id: Int, val text: String, val time: String, val mine: Boolean)
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { ChatConnectIndustryApp() }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatConnectIndustryApp() {
+    val chats = remember {
+        mutableStateListOf(
+            ChatItem(1, "Aman Verma", "Kal milte hain bhai 👍", "7:42 PM", 2, "AV", Color(0xFFB8D8C0), true, true),
+            ChatItem(2, "CSE Friends 🎓", "Rohit: Practical file bhej do", "7:18 PM", 5, "CF", Color(0xFFD9C5F2), false, true, true),
+            ChatItem(3, "Rohit Sharma", "Photo bhej di hai", "6:54 PM", 0, "RS", Color(0xFFFFD6A5), false),
+            ChatItem(4, "Priya Singh", "Thank you 😊", "5:36 PM", 0, "PS", Color(0xFFFFC6D9), true),
+            ChatItem(5, "Family Group", "Mummy: Ghar kab aaoge?", "4:20 PM", 3, "FG", Color(0xFFC7DDF5), false, false, true),
+            ChatItem(6, "Rahul", "Theek hai, done!", "Yesterday", 0, "RK", Color(0xFFFFE5A5), false),
+            ChatItem(7, "Project Team", "Meeting at 10 AM tomorrow", "Yesterday", 0, "PT", Color(0xFFB8E0D2), false, false, true)
+        )
+    }
+
+    var activeTab by remember { mutableIntStateOf(0) }
+    var openedChat by remember { mutableStateOf<ChatItem?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var messageDraft by remember { mutableStateOf("") }
+    var showNewChat by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var infoDialog by remember { mutableStateOf<String?>(null) }
+    var nextMessageId by remember { mutableIntStateOf(100) }
+
+    val messages = remember { mutableStateListOf<MessageItem>() }
+
+    fun openConversation(chat: ChatItem) {
+        openedChat = chat
+        messages.clear()
+        messages.addAll(
+            when (chat.id) {
+                1 -> listOf(
+                    MessageItem(1, "Bhai kya haal hai?", "7:38 PM", false),
+                    MessageItem(2, "Sab badhiya! Tu bata.", "7:39 PM", true),
+                    MessageItem(3, "Kal college me milte hain 👍", "7:42 PM", false)
+                )
+                2 -> listOf(
+                    MessageItem(1, "Kal practical file submit hai?", "7:10 PM", false),
+                    MessageItem(2, "Haan bhai, complete kar raha hoon.", "7:12 PM", true),
+                    MessageItem(3, "Rohit: Practical file bhej do", "7:18 PM", false)
+                )
+                else -> listOf(
+                    MessageItem(1, "Hi 👋", "10:30 AM", false),
+                    MessageItem(2, chat.message, chat.time, true)
+                )
+            }
+        )
+        chats.replaceAll { if (it.id == chat.id) it.copy(unread = 0) else it }
+        messageDraft = ""
+    }
+
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = BrandGreen,
+            secondary = BrightGreen,
+            background = ScreenBg,
+            surface = Color.White
+        )
+    ) {
+        Scaffold(
+            containerColor = ScreenBg,
+            topBar = {
+                if (openedChat == null) {
+                    TopAppBar(
+                        title = {
+                            Text(
+                                "ChatConnect",
+                                color = BrandGreen,
+                                fontSize = 23.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        actions = {
+                            Text(
+                                "⌕",
+                                modifier = Modifier
+                                    .padding(horizontal = 10.dp)
+                                    .clickable { infoDialog = "Search chats using the search field on the screen." },
+                                color = BrandGreen,
+                                fontSize = 30.sp
+                            )
+                            Box {
+                                Text(
+                                    "⋮",
+                                    modifier = Modifier
+                                        .clickable { showMoreMenu = true }
+                                        .padding(horizontal = 16.dp),
+                                    color = BrandGreen,
+                                    fontSize = 26.sp
+                                )
+                                DropdownMenu(
+                                    expanded = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("New group") },
+                                        onClick = { showMoreMenu = false; infoDialog = "Group creation will be connected to the backend in the next phase." }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Settings") },
+                                        onClick = { showMoreMenu = false; activeTab = 4 }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("About ChatConnect") },
+                                        onClick = { showMoreMenu = false; infoDialog = "ChatConnect is a messaging-app learning project." }
+                                    )
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                    )
+                } else {
+                    TopAppBar(
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                AvatarView(
+                                    initials = openedChat!!.initials,
+                                    color = openedChat!!.color,
+                                    size = 42,
+                                    online = openedChat!!.online
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        openedChat!!.name,
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        if (openedChat!!.online) "online" else "tap here for contact info",
+                                        fontSize = 12.sp,
+                                        color = SecondaryText
+                                    )
+                                }
+                            }
+                        },
+                        navigationIcon = {
+                            Text(
+                                "‹",
+                                modifier = Modifier
+                                    .clickable { openedChat = null }
+                                    .padding(horizontal = 12.dp),
+                                color = BrandGreen,
+                                fontSize = 36.sp
+                            )
+                        },
+                        actions = {
+                            Text("▣", modifier = Modifier.padding(horizontal = 10.dp), fontSize = 21.sp, color = BrandGreen)
+                            Text("☎", modifier = Modifier.padding(horizontal = 10.dp), fontSize = 21.sp, color = BrandGreen)
+                            Text("⋮", modifier = Modifier.padding(horizontal = 12.dp), fontSize = 24.sp, color = BrandGreen)
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                    )
+                }
+            },
+            bottomBar = {
+                if (openedChat == null) {
+                    NavigationBar(
+                        containerColor = Color.White,
+                        contentColor = BrandGreen,
+                        tonalElevation = 8.dp
+                    ) {
+                        NavigationBarItem(
+                            selected = activeTab == 0,
+                            onClick = { activeTab = 0 },
+                            icon = { Text("💬", fontSize = 20.sp) },
+                            label = { Text("Chats") }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == 1,
+                            onClick = { activeTab = 1 },
+                            icon = { Text("◉", fontSize = 22.sp) },
+                            label = { Text("Updates") }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == 2,
+                            onClick = { activeTab = 2 },
+                            icon = { Text("☎", fontSize = 20.sp) },
+                            label = { Text("Calls") }
+                        )
+                        NavigationBarItem(
+                            selected = activeTab == 3,
+                            onClick = { activeTab = 3 },
+                            icon = { Text("👥", fontSize = 20.sp) },
+                            label = { Text("Communities") }
+                        )
+                    }
+                }
+            },
+            floatingActionButton = {
+                if (openedChat == null && activeTab == 0) {
+                    FloatingActionButton(
+                        onClick = { showNewChat = true },
+                        containerColor = BrightGreen,
+                        contentColor = Color.White,
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text("✉", fontSize = 25.sp)
+                    }
+                }
+            }
+        ) { padding ->
+            if (openedChat != null) {
+                ConversationView(
+                    modifier = Modifier.padding(padding),
+                    chat = openedChat!!,
+                    messages = messages,
+                    draft = messageDraft,
+                    onDraftChange = { messageDraft = it },
+                    onSend = {
+                        val trimmed = messageDraft.trim()
+                        if (trimmed.isNotEmpty()) {
+                            messages.add(MessageItem(nextMessageId++, trimmed, "Now", true))
+                            chats.replaceAll {
+                                if (it.id == openedChat!!.id) it.copy(message = trimmed, time = "Now", unread = 0)
+                                else it
+                            }
+                            messageDraft = ""
+                        }
+                    }
+                )
+            } else {
+                when (activeTab) {
+                    0 -> ChatsHome(
+                        modifier = Modifier.padding(padding),
+                        chats = chats,
+                        searchQuery = searchQuery,
+                        onSearchChange = { searchQuery = it },
+                        onChatClick = { openConversation(it) }
+                    )
+                    1 -> UpdatesHome(Modifier.padding(padding), onStatusClick = {
+                        infoDialog = "Status updates are a UI preview. Camera and upload functionality can be added next."
+                    })
+                    2 -> CallsHome(Modifier.padding(padding), chats, onCallClick = {
+                        infoDialog = "Calling needs Android call/VoIP integration. This button is a UI preview."
+                    }, onChatClick = { openConversation(it) })
+                    3 -> CommunitiesHome(Modifier.padding(padding), onOpen = {
+                        infoDialog = "Community creation and group messaging need a backend."
+                    })
+                    else -> SettingsHome(Modifier.padding(padding))
+                }
+            }
+        }
+    }
+
+    if (showNewChat) {
+        AlertDialog(
+            onDismissRequest = { showNewChat = false },
+            title = { Text("Start a new chat") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose a demo contact to open a conversation.")
+                    chats.take(5).forEach { chat ->
+                        Text(
+                            "${chat.initials}   ${chat.name}",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    showNewChat = false
+                                    openConversation(chat)
+                                }
+                                .padding(8.dp),
+                            color = BrandGreen,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showNewChat = false }) { Text("Close") }
+            }
+        )
+    }
+
+    if (infoDialog != null) {
+        AlertDialog(
+            onDismissRequest = { infoDialog = null },
+            title = { Text("ChatConnect") },
+            text = { Text(infoDialog!!) },
+            confirmButton = { TextButton(onClick = { infoDialog = null }) { Text("OK") } }
+        )
+    }
+}
+
+@Composable
+private fun ChatsHome(
+    modifier: Modifier,
+    chats: List<ChatItem>,
+    searchQuery: String,
+    onSearchChange: (String) -> Unit,
+    onChatClick: (ChatItem) -> Unit
+) {
+    Column(modifier.fillMaxSize().background(Color.White)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.White)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                color = Color(0xFFF0F2F5),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("⌕", fontSize = 25.sp, color = SecondaryText)
+                    Spacer(Modifier.width(8.dp))
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchChange,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 15.sp, color = Color(0xFF111B21)),
+                        decorationBox = { inner ->
+                            if (searchQuery.isEmpty()) {
+                                Text("Ask Meta AI or Search", color = SecondaryText, fontSize = 14.sp)
+                            }
+                            inner()
+                        }
+                    )
+                }
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 92.dp)
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Chats", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Color(0xFF111B21))
+                    Spacer(Modifier.weight(1f))
+                    Surface(color = Color(0xFFE7F4EF), shape = RoundedCornerShape(20.dp)) {
+                        Text("✓  Read all", modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = BrandGreen, fontSize = 12.sp)
+                    }
+                }
+            }
+            item { StatusPreview() }
+            item {
+                Text(
+                    "RECENT",
+                    modifier = Modifier.padding(start = 18.dp, top = 14.dp, bottom = 8.dp),
+                    fontSize = 11.sp,
+                    color = SecondaryText,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp
+                )
+            }
+            items(chats.filter {
+                it.name.contains(searchQuery, true) || it.message.contains(searchQuery, true)
+            }, key = { it.id }) { chat ->
+                ChatListRow(chat) { onChatClick(chat) }
+            }
+            if (chats.none { it.name.contains(searchQuery, true) || it.message.contains(searchQuery, true) }) {
+                item {
+                    Text("No chats found", color = SecondaryText, modifier = Modifier.padding(24.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPreview() {
+    Column(Modifier.fillMaxWidth().background(Color.White)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("●", color = BrightGreen, fontSize = 10.sp)
+            Spacer(Modifier.width(6.dp))
+            Text("Status", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF111B21))
+            Spacer(Modifier.weight(1f))
+            Text("See all  ›", color = BrightGreen, fontSize = 13.sp)
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            StatusAvatar("You", "＋", Color(0xFFB9D9CB), false)
+            StatusAvatar("Aman", "AV", Color(0xFFFFD6A5), true)
+            StatusAvatar("Priya", "PS", Color(0xFFFFC6D9), true)
+            StatusAvatar("Rohit", "RS", Color(0xFFC5D9F1), true)
+            StatusAvatar("Family", "FG", Color(0xFFE3D1F4), true)
+        }
+        HorizontalDivider(color = DividerColor)
+    }
+}
+
+@Composable
+private fun StatusAvatar(label: String, initials: String, color: Color, hasStatus: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(58.dp)) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .size(55.dp)
+                    .then(if (hasStatus) Modifier.border(2.dp, BrightGreen, CircleShape) else Modifier)
+                    .padding(if (hasStatus) 4.dp else 0.dp)
+                    .background(color, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(initials, color = Color(0xFF29473E), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(label, fontSize = 11.sp, color = SecondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun ChatListRow(chat: ChatItem, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(Color.White)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AvatarView(chat.initials, chat.color, 54, chat.online)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    chat.name,
+                    fontSize = 16.sp,
+                    fontWeight = if (chat.unread > 0) FontWeight.Bold else FontWeight.SemiBold,
+                    color = Color(0xFF111B21),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (chat.pinned) {
+                    Spacer(Modifier.width(5.dp))
+                    Text("⌖", color = SecondaryText, fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (chat.unread == 0) {
+                    Text("✓✓", color = Color(0xFF53BDEB), fontSize = 11.sp)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(
+                    chat.message,
+                    color = if (chat.unread > 0) Color(0xFF303B40) else SecondaryText,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
+            Text(
+                chat.time,
+                fontSize = 11.sp,
+                color = if (chat.unread > 0) BrightGreen else SecondaryText
+            )
+            if (chat.unread > 0) {
+                Spacer(Modifier.height(5.dp))
+                Box(
+                    Modifier.size(21.dp).background(BrightGreen, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(chat.unread.toString(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (chat.isGroup) {
+                Text("♧", fontSize = 12.sp, color = SecondaryText)
+            }
+        }
+    }
+    HorizontalDivider(color = DividerColor, thickness = 0.7.dp)
+}
+
+@Composable
+private fun AvatarView(initials: String, color: Color, size: Int, online: Boolean = false) {
+    Box {
+        Box(
+            Modifier.size(size.dp).background(color, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(initials, fontSize = (size / 3.1f).sp, fontWeight = FontWeight.Bold, color = Color(0xFF29473E))
+        }
+        if (online) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(13.dp)
+                    .background(Color.White, CircleShape)
+                    .padding(2.dp)
+                    .background(AccentGreen, CircleShape)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConversationView(
+    modifier: Modifier,
+    chat: ChatItem,
+    messages: List<MessageItem>,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
+    }
+    Column(modifier.fillMaxSize().background(ChatWallpaper)) {
+        Surface(
+            color = Color(0xFFFFF4D6),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp)
+        ) {
+            Text(
+                "🔒  Messages in this demo are stored locally on this screen only.",
+                modifier = Modifier.padding(10.dp),
+                color = Color(0xFF6A5D42),
+                fontSize = 11.sp
+            )
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            items(messages, key = { it.id }) { message ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = if (message.mine) Arrangement.End else Arrangement.Start
+                ) {
+                    Surface(
+                        color = if (message.mine) SentMessage else Color.White,
+                        shape = RoundedCornerShape(
+                            topStart = 12.dp, topEnd = 12.dp,
+                            bottomStart = if (message.mine) 12.dp else 3.dp,
+                            bottomEnd = if (message.mine) 3.dp else 12.dp
+                        ),
+                        shadowElevation = 1.dp,
+                        modifier = Modifier.widthIn(max = 310.dp)
+                    ) {
+                        Column(Modifier.padding(start = 11.dp, top = 7.dp, end = 8.dp, bottom = 5.dp)) {
+                            Text(message.text, color = Color(0xFF111B21), fontSize = 15.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.align(Alignment.End)) {
+                                Text(message.time, color = SecondaryText, fontSize = 10.sp)
+                                if (message.mine) {
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("✓✓", color = Color(0xFF53BDEB), fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().background(Color(0xFFF7F7F7)).padding(horizontal = 7.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            Text("☺", color = SecondaryText, fontSize = 25.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp))
+            Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                BasicTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
+                    textStyle = TextStyle(fontSize = 15.sp, color = Color(0xFF111B21)),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(BrightGreen),
+                    decorationBox = { inner ->
+                        if (draft.isEmpty()) Text("Message", color = SecondaryText, fontSize = 15.sp)
+                        inner()
+                    }
+                )
+            }
+            Spacer(Modifier.width(7.dp))
+            Box(
+                Modifier.size(46.dp).background(BrightGreen, CircleShape).clickable(onClick = onSend),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("➤", color = Color.White, fontSize = 22.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdatesHome(modifier: Modifier, onStatusClick: () -> Unit) {
+    Column(modifier.fillMaxSize().background(Color.White).padding(18.dp)) {
+        Text("Updates", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = Color(0xFF111B21))
+        Spacer(Modifier.height(20.dp))
+        Text("Status", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onStatusClick).padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(58.dp).border(2.dp, DividerColor, CircleShape).padding(4.dp).background(Color(0xFFD9EDE4), CircleShape), contentAlignment = Alignment.Center) {
+                Text("+", fontSize = 30.sp, color = BrandGreen)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("My status", fontWeight = FontWeight.SemiBold)
+                Text("Tap to add a status update", color = SecondaryText, fontSize = 13.sp)
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        Text("CHANNELS", color = SecondaryText, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(14.dp))
+        Text("Follow channels to see updates from people and topics you care about.", color = SecondaryText, fontSize = 14.sp)
+        Spacer(Modifier.height(14.dp))
+        Button(onClick = onStatusClick, colors = ButtonDefaults.buttonColors(containerColor = BrightGreen)) {
+            Text("Explore channels")
+        }
+    }
+}
+
+@Composable
+private fun CallsHome(
+    modifier: Modifier,
+    chats: List<ChatItem>,
+    onCallClick: (ChatItem) -> Unit,
+    onChatClick: (ChatItem) -> Unit
+) {
+    Column(modifier.fillMaxSize().background(Color.White)) {
+        Text("Calls", fontSize = 27.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(18.dp))
+        Row(
+            Modifier.fillMaxWidth().clickable { onCallClick(chats.first()) }.padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(52.dp).background(Color(0xFFE0F2E9), CircleShape), contentAlignment = Alignment.Center) {
+                Text("☎", fontSize = 24.sp, color = BrandGreen)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Create call link", fontWeight = FontWeight.SemiBold)
+                Text("Share a link for your call", color = SecondaryText, fontSize = 13.sp)
+            }
+            Text("＋", fontSize = 25.sp, color = BrightGreen)
+        }
+        HorizontalDivider(color = DividerColor)
+        Text("RECENT", color = SecondaryText, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.2.sp, modifier = Modifier.padding(18.dp))
+        chats.take(5).forEach { chat ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onChatClick(chat) }.padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AvatarView(chat.initials, chat.color, 48)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(chat.name, fontWeight = FontWeight.SemiBold)
+                    Text("Tap to open conversation", color = SecondaryText, fontSize = 12.sp)
+                }
+                Text("☎", color = BrightGreen, fontSize = 22.sp, modifier = Modifier.clickable { onCallClick(chat) }.padding(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommunitiesHome(modifier: Modifier, onOpen: () -> Unit) {
+    Column(modifier.fillMaxSize().background(Color.White).padding(18.dp)) {
+        Text("Communities", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = Color(0xFF111B21))
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth().background(Color(0xFFF0F6F3), RoundedCornerShape(20.dp)).padding(22.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("👥", fontSize = 54.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("Bring groups together", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(7.dp))
+                Text("Organize groups and keep everyone in the loop.", color = SecondaryText, fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onOpen, colors = ButtonDefaults.buttonColors(containerColor = BrightGreen)) {
+                    Text("Start a community")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsHome(modifier: Modifier) {
+    Column(modifier.fillMaxSize().background(Color.White).padding(18.dp)) {
+        Text("Settings", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AvatarView("CC", Color(0xFFB8D8C0), 62)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text("ChatConnect User", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("Set up your profile", color = SecondaryText, fontSize = 13.sp)
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        SettingRow("👤", "Account", "Security notifications, change number")
+        SettingRow("🔒", "Privacy", "Block contacts, disappearing messages")
+        SettingRow("💬", "Chats", "Theme, wallpapers, chat history")
+        SettingRow("🔔", "Notifications", "Message, group and call tones")
+        SettingRow("◉", "Storage and data", "Network usage, auto-download")
+        SettingRow("❓", "Help", "Help centre, contact us, privacy policy")
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "Prototype note: real accounts, encrypted internet messaging, calls and media upload are not connected yet.",
+            color = SecondaryText, fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun SettingRow(icon: String, title: String, subtitle: String) {
+    Row(
+        Modifier.fillMaxWidth().clickable { }.padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(icon, fontSize = 25.sp, modifier = Modifier.width(44.dp))
+        Column {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text(subtitle, color = SecondaryText, fontSize = 12.sp)
+        }
+    }
+}
